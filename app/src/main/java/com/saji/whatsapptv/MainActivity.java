@@ -535,6 +535,7 @@ public class MainActivity extends Activity {
         status.setTextSize(12);
         status.setPadding(0, 0, 0, dp(10));
         content.addView(status);
+        Runnable refreshStatus = () -> status.setText(buildPermissionStatus());
 
         Button androidMic = makeDialogButton("ALLOW ANDROID MICROPHONE");
         content.addView(androidMic);
@@ -588,7 +589,6 @@ public class MainActivity extends Activity {
         content.addView(micTest);
         micTest.setOnClickListener(v -> startSpeechToText());
 
-        Runnable refreshStatus = () -> status.setText(buildPermissionStatus());
         refreshStatus.run();
 
         websiteMic.setOnCheckedChangeListener((v, checked) -> {
