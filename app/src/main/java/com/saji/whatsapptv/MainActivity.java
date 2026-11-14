@@ -24,6 +24,7 @@ import android.view.WindowInsets;
 import android.view.WindowInsetsController;
 import android.webkit.CookieManager;
 import android.webkit.DownloadListener;
+import android.webkit.GeolocationPermissions;
 import android.webkit.PermissionRequest;
 import android.webkit.ValueCallback;
 import android.webkit.WebChromeClient;
@@ -46,8 +47,11 @@ public class MainActivity extends Activity {
     private static final String WHATSAPP_URL = "https://web.whatsapp.com/";
     private static final String PREFS = "yellow_whatsapp_tv";
     private static final String PREF_WEBSITE_MIC = "website_mic_enabled";
+    private static final String PREF_WEBSITE_CAMERA = "website_camera_enabled";
+    private static final String PREF_WEBSITE_LOCATION = "website_location_enabled";
     private static final int REQUEST_MIC = 410;
     private static final int REQUEST_FILE = 411;
+    private static final int REQUEST_WEB_PERMISSIONS = 412;
     private static final int ACTION_NONE = 0;
     private static final int ACTION_SPEECH_TO_TEXT = 1;
     private static final int ACTION_WEB_RECORD = 2;
@@ -57,6 +61,8 @@ public class MainActivity extends Activity {
     private LinearLayout sidebar;
     private SpeechRecognizer speechRecognizer;
     private PermissionRequest pendingWebPermission;
+    private GeolocationPermissions.Callback pendingGeolocationCallback;
+    private String pendingGeolocationOrigin;
     private ValueCallback<Uri[]> filePathCallback;
     private int pendingMicAction = ACTION_NONE;
     private boolean isListening = false;
@@ -210,6 +216,7 @@ public class MainActivity extends Activity {
         s.setJavaScriptEnabled(true);
         s.setDomStorageEnabled(true);
         s.setDatabaseEnabled(true);
+        s.setGeolocationEnabled(true);
         s.setAllowFileAccess(false);
         s.setAllowContentAccess(true);
         s.setJavaScriptCanOpenWindowsAutomatically(true);
@@ -238,6 +245,9 @@ public class MainActivity extends Activity {
             }
             @Override public void onPermissionRequestCanceled(PermissionRequest request) {
                 if (pendingWebPermission == request) pendingWebPermission = null;
+            }
+            @Override public void onGeolocationPermissionsShowPrompt(String origin, GeolocationPermissions.Callback callback) {
+                handleWebsiteGeolocationRequest(origin, callback);
             }
             @Override public boolean onShowFileChooser(WebView view, ValueCallback<Uri[]> callback, FileChooserParams params) {
                 if (filePathCallback != null) filePathCallback.onReceiveValue(null);
@@ -405,48 +415,124 @@ public class MainActivity extends Activity {
 
     private void handleWebsitePermissionRequest(PermissionRequest request) {
         if (!isWhatsAppWebOrigin(request.getOrigin())) { request.deny(); return; }
-        boolean audio = false;
-        for (String r : request.getResources()) if (PermissionRequest.RESOURCE_AUDIO_CAPTURE.equals(r)) audio = true;
-        if (!audio || !isWebsiteMicEnabled()) { request.deny(); return; }
+        if (pendingWebPermission != null && pendingWebPermission != request) { request.deny(); return; }
         pendingWebPermission = request;
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M &&
-                checkSelfPermission(Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED) {
-            requestMicrophonePermission(ACTION_NONE);
+        ArrayList<String> needed = new ArrayList<>();
+        for (String resource : request.getResources()) {
+            if (PermissionRequest.RESOURCE_AUDIO_CAPTURE.equals(resource) &&
+                    isWebsiteMicEnabled() && !hasAndroidPermission(Manifest.permission.RECORD_AUDIO)) {
+                needed.add(Manifest.permission.RECORD_AUDIO);
+            } else if (PermissionRequest.RESOURCE_VIDEO_CAPTURE.equals(resource) &&
+                    isWebsiteCameraEnabled() && !hasAndroidPermission(Manifest.permission.CAMERA)) {
+                needed.add(Manifest.permission.CAMERA);
+            }
+        }
+        if (!needed.isEmpty() && Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+            requestPermissions(needed.toArray(new String[0]), REQUEST_WEB_PERMISSIONS);
+        } else {
+            resolvePendingWebsitePermission();
+        }
+    }
+
+    private void handleWebsiteGeolocationRequest(String origin, GeolocationPermissions.Callback callback) {
+        if (!isWhatsAppWebOrigin(Uri.parse(origin)) || !isWebsiteLocationEnabled()) {
+            callback.invoke(origin, false, false);
             return;
         }
-        grantPendingWebsiteAudio();
+        if (hasAndroidLocationPermission()) {
+            callback.invoke(origin, true, false);
+            return;
+        }
+        if (pendingGeolocationCallback != null) {
+            callback.invoke(origin, false, false);
+            return;
+        }
+        pendingGeolocationOrigin = origin;
+        pendingGeolocationCallback = callback;
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+            requestPermissions(new String[]{Manifest.permission.ACCESS_FINE_LOCATION,
+                    Manifest.permission.ACCESS_COARSE_LOCATION}, REQUEST_WEB_PERMISSIONS);
+        } else {
+            resolvePendingWebsiteGeolocation();
+        }
     }
 
     private boolean isWhatsAppWebOrigin(Uri origin) {
         return origin != null && "web.whatsapp.com".equalsIgnoreCase(origin.getHost());
     }
 
-    private void grantPendingWebsiteAudio() {
+    private boolean hasAndroidPermission(String permission) {
+        return Build.VERSION.SDK_INT < Build.VERSION_CODES.M ||
+                checkSelfPermission(permission) == PackageManager.PERMISSION_GRANTED;
+    }
+
+    private boolean hasAndroidLocationPermission() {
+        return hasAndroidPermission(Manifest.permission.ACCESS_FINE_LOCATION) ||
+                hasAndroidPermission(Manifest.permission.ACCESS_COARSE_LOCATION);
+    }
+
+    private void resolvePendingWebsitePermission() {
         PermissionRequest request = pendingWebPermission;
         if (request == null) return;
         pendingWebPermission = null;
-        if (!isWebsiteMicEnabled() || (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M &&
-                checkSelfPermission(Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED)) {
-            request.deny();
-            return;
-        }
         ArrayList<String> allowed = new ArrayList<>();
-        for (String r : request.getResources()) if (PermissionRequest.RESOURCE_AUDIO_CAPTURE.equals(r)) allowed.add(r);
+        for (String resource : request.getResources()) {
+            if (PermissionRequest.RESOURCE_AUDIO_CAPTURE.equals(resource) &&
+                    isWebsiteMicEnabled() && hasAndroidPermission(Manifest.permission.RECORD_AUDIO)) {
+                allowed.add(resource);
+            } else if (PermissionRequest.RESOURCE_VIDEO_CAPTURE.equals(resource) &&
+                    isWebsiteCameraEnabled() && hasAndroidPermission(Manifest.permission.CAMERA)) {
+                allowed.add(resource);
+            }
+        }
         if (allowed.isEmpty()) request.deny();
         else request.grant(allowed.toArray(new String[0]));
     }
 
+    private void resolvePendingWebsiteGeolocation() {
+        GeolocationPermissions.Callback callback = pendingGeolocationCallback;
+        String origin = pendingGeolocationOrigin;
+        pendingGeolocationCallback = null;
+        pendingGeolocationOrigin = null;
+        if (callback == null) return;
+        boolean allow = origin != null && isWhatsAppWebOrigin(Uri.parse(origin)) &&
+                isWebsiteLocationEnabled() && hasAndroidLocationPermission();
+        callback.invoke(origin, allow, false);
+    }
+
     private boolean isWebsiteMicEnabled() { return preferences.getBoolean(PREF_WEBSITE_MIC, true); }
+    private boolean isWebsiteCameraEnabled() { return preferences.getBoolean(PREF_WEBSITE_CAMERA, false); }
+    private boolean isWebsiteLocationEnabled() { return preferences.getBoolean(PREF_WEBSITE_LOCATION, false); }
 
     private void showSettings() {
+        ScrollView scroll = new ScrollView(this);
+        scroll.setFillViewport(true);
+        scroll.setVerticalScrollBarEnabled(false);
+
         LinearLayout content = new LinearLayout(this);
         content.setOrientation(LinearLayout.VERTICAL);
-        content.setPadding(dp(20), dp(12), dp(20), dp(8));
+        content.setPadding(dp(20), dp(12), dp(20), dp(10));
         content.setBackgroundColor(0xFF17221A);
+        scroll.addView(content);
+
+        TextView intro = new TextView(this);
+        intro.setText("Control what WhatsApp Web can access. Changes are saved automatically.");
+        intro.setTextColor(0xFFDDE9DD);
+        intro.setTextSize(13);
+        intro.setPadding(0, 0, 0, dp(12));
+        content.addView(intro);
+
+        TextView section = new TextView(this);
+        section.setText("WEBSITE PERMISSIONS");
+        section.setTextColor(0xFFFFDF70);
+        section.setTextSize(14);
+        section.setTypeface(Typeface.DEFAULT, Typeface.BOLD);
+        section.setPadding(0, dp(4), 0, dp(6));
+        content.addView(section);
 
         TextView status = new TextView(this);
         status.setTextColor(Color.WHITE);
-        status.setTextSize(14);
+        status.setTextSize(12);
         status.setPadding(0, 0, 0, dp(10));
         content.addView(status);
 
@@ -454,15 +540,23 @@ public class MainActivity extends Activity {
         content.addView(androidMic);
         androidMic.setOnClickListener(v -> requestMicrophonePermission(ACTION_NONE));
 
-        android.widget.Switch websiteMic = new android.widget.Switch(this);
-        websiteMic.setText("WHATSAPP WEBSITE MIC ACCESS");
-        websiteMic.setTextColor(Color.WHITE);
-        websiteMic.setTextSize(14);
-        websiteMic.setPadding(0, dp(12), 0, dp(12));
-        websiteMic.setChecked(isWebsiteMicEnabled());
+        android.widget.Switch websiteMic = makePermissionSwitch("MICROPHONE ACCESS", isWebsiteMicEnabled());
         content.addView(websiteMic);
 
-        Button appSettings = makeDialogButton("OPEN ANDROID APP SETTINGS");
+        android.widget.Switch websiteCamera = makePermissionSwitch("CAMERA ACCESS", isWebsiteCameraEnabled());
+        content.addView(websiteCamera);
+
+        android.widget.Switch websiteLocation = makePermissionSwitch("LOCATION ACCESS", isWebsiteLocationEnabled());
+        content.addView(websiteLocation);
+
+        TextView notificationInfo = new TextView(this);
+        notificationInfo.setText("NOTIFICATIONS: Android WebView does not expose a reliable website notification permission switch here. This app will not show a fake Allow control.");
+        notificationInfo.setTextColor(0xFFB9C8BA);
+        notificationInfo.setTextSize(12);
+        notificationInfo.setPadding(dp(2), dp(10), dp(2), dp(10));
+        content.addView(notificationInfo);
+
+        Button appSettings = makeDialogButton("OPEN ANDROID APP PERMISSIONS");
         content.addView(appSettings);
         appSettings.setOnClickListener(v -> openAndroidAppSettings());
 
@@ -474,33 +568,68 @@ public class MainActivity extends Activity {
         content.addView(micTest);
         micTest.setOnClickListener(v -> startSpeechToText());
 
-        status.setText(buildPermissionStatus());
+        Runnable refreshStatus = () -> status.setText(buildPermissionStatus());
+        refreshStatus.run();
+
         websiteMic.setOnCheckedChangeListener((v, checked) -> {
             preferences.edit().putBoolean(PREF_WEBSITE_MIC, checked).apply();
-            status.setText(buildPermissionStatus());
             if (!checked && pendingWebPermission != null) {
                 try { pendingWebPermission.deny(); } catch (Exception ignored) {}
                 pendingWebPermission = null;
             }
+            refreshStatus.run();
             Toast.makeText(this, checked ? "WhatsApp website mic access ON" : "WhatsApp website mic access OFF", Toast.LENGTH_SHORT).show();
+        });
+        websiteCamera.setOnCheckedChangeListener((v, checked) -> {
+            preferences.edit().putBoolean(PREF_WEBSITE_CAMERA, checked).apply();
+            refreshStatus.run();
+            Toast.makeText(this, checked ? "Website camera access ON" : "Website camera access OFF", Toast.LENGTH_SHORT).show();
+        });
+        websiteLocation.setOnCheckedChangeListener((v, checked) -> {
+            preferences.edit().putBoolean(PREF_WEBSITE_LOCATION, checked).apply();
+            if (!checked && pendingGeolocationCallback != null) resolvePendingWebsiteGeolocation();
+            refreshStatus.run();
+            Toast.makeText(this, checked ? "Website location access ON" : "Website location access OFF", Toast.LENGTH_SHORT).show();
         });
 
         AlertDialog dialog = new AlertDialog.Builder(this)
                 .setTitle("YELLOW WHATSAPP TV SETTINGS")
-                .setView(content)
+                .setView(scroll)
                 .setNegativeButton("CLOSE", null)
                 .create();
         dialog.setOnShowListener(d -> androidMic.requestFocus());
         dialog.show();
-        if (dialog.getWindow() != null) dialog.getWindow().setBackgroundDrawableResource(android.R.color.transparent);
+        if (dialog.getWindow() != null) {
+            dialog.getWindow().setBackgroundDrawableResource(android.R.color.transparent);
+            dialog.getWindow().setLayout((int)(getResources().getDisplayMetrics().widthPixels * 0.72f),
+                    (int)(getResources().getDisplayMetrics().heightPixels * 0.82f));
+        }
+    }
+
+    private android.widget.Switch makePermissionSwitch(String label, boolean checked) {
+        android.widget.Switch sw = new android.widget.Switch(this);
+        sw.setText(label);
+        sw.setTextColor(Color.WHITE);
+        sw.setTextSize(13);
+        sw.setPadding(0, dp(10), 0, dp(10));
+        sw.setChecked(checked);
+        sw.setFocusable(true);
+        sw.setFocusableInTouchMode(false);
+        sw.setMinHeight(dp(54));
+        return sw;
     }
 
     private String buildPermissionStatus() {
-        boolean androidMic = Build.VERSION.SDK_INT < Build.VERSION_CODES.M ||
-                checkSelfPermission(Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED;
+        boolean androidMic = hasAndroidPermission(Manifest.permission.RECORD_AUDIO);
+        boolean androidCamera = hasAndroidPermission(Manifest.permission.CAMERA);
+        boolean androidLocation = hasAndroidLocationPermission();
         return "Android microphone: " + (androidMic ? "ALLOWED" : "NOT ALLOWED") +
-                "\nWhatsApp website microphone: " + (isWebsiteMicEnabled() ? "ON (WhatsApp Web only)" : "OFF") +
-                "\n\nWebsite audio is approved only when web.whatsapp.com requests it.";
+                "\nWebsite microphone: " + (isWebsiteMicEnabled() ? "ALLOW" : "BLOCK") +
+                "\nAndroid camera: " + (androidCamera ? "ALLOWED" : "NOT ALLOWED") +
+                "\nWebsite camera: " + (isWebsiteCameraEnabled() ? "ALLOW" : "BLOCK") +
+                "\nAndroid location: " + (androidLocation ? "ALLOWED" : "NOT ALLOWED") +
+                "\nWebsite location: " + (isWebsiteLocationEnabled() ? "ALLOW" : "BLOCK") +
+                "\n\nWebsite permissions apply only to web.whatsapp.com.";
     }
 
     private Button makeDialogButton(String label) {
@@ -549,6 +678,9 @@ public class MainActivity extends Activity {
                 }
                 Toast.makeText(this, "Microphone permission allow karna zaroori hai.", Toast.LENGTH_LONG).show();
             }
+        } else if (requestCode == REQUEST_WEB_PERMISSIONS) {
+            resolvePendingWebsitePermission();
+            resolvePendingWebsiteGeolocation();
         }
     }
 
