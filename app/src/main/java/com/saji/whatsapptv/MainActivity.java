@@ -410,7 +410,7 @@ public class MainActivity extends Activity {
         pendingMicAction = ACTION_NONE;
         if (action == ACTION_SPEECH_TO_TEXT) startSpeechRecognition();
         else if (action == ACTION_WEB_RECORD) clickWhatsAppRecordControl();
-        if (pendingWebPermission != null) grantPendingWebsiteAudio();
+        if (pendingWebPermission != null) resolvePendingWebsitePermission();
     }
 
     private void handleWebsitePermissionRequest(PermissionRequest request) {
