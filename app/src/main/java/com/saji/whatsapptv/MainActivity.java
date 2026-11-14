@@ -435,7 +435,7 @@ public class MainActivity extends Activity {
     }
 
     private void handleWebsiteGeolocationRequest(String origin, GeolocationPermissions.Callback callback) {
-        if (!isWhatsAppWebOrigin(Uri.parse(origin)) || !isWebsiteLocationEnabled()) {
+        if (origin == null || !isWhatsAppWebOrigin(Uri.parse(origin)) || !isWebsiteLocationEnabled()) {
             callback.invoke(origin, false, false);
             return;
         }
@@ -555,6 +555,26 @@ public class MainActivity extends Activity {
         notificationInfo.setTextSize(12);
         notificationInfo.setPadding(dp(2), dp(10), dp(2), dp(10));
         content.addView(notificationInfo);
+
+        Button resetPermissions = makeDialogButton("RESET WEBSITE PERMISSIONS");
+        content.addView(resetPermissions);
+        resetPermissions.setOnClickListener(v -> {
+            preferences.edit()
+                    .putBoolean(PREF_WEBSITE_MIC, true)
+                    .putBoolean(PREF_WEBSITE_CAMERA, false)
+                    .putBoolean(PREF_WEBSITE_LOCATION, false)
+                    .apply();
+            websiteMic.setChecked(true);
+            websiteCamera.setChecked(false);
+            websiteLocation.setChecked(false);
+            if (pendingWebPermission != null) {
+                try { pendingWebPermission.deny(); } catch (Exception ignored) {}
+                pendingWebPermission = null;
+            }
+            if (pendingGeolocationCallback != null) resolvePendingWebsiteGeolocation();
+            refreshStatus.run();
+            Toast.makeText(this, "Website permissions reset ho gayi.", Toast.LENGTH_SHORT).show();
+        });
 
         Button appSettings = makeDialogButton("OPEN ANDROID APP PERMISSIONS");
         content.addView(appSettings);
@@ -720,6 +740,7 @@ public class MainActivity extends Activity {
             try { pendingWebPermission.deny(); } catch (Exception ignored) {}
             pendingWebPermission = null;
         }
+        if (pendingGeolocationCallback != null) resolvePendingWebsiteGeolocation();
         if (filePathCallback != null) { filePathCallback.onReceiveValue(null); filePathCallback = null; }
         if (webView != null) {
             try {
