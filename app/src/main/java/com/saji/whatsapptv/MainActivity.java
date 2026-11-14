@@ -77,7 +77,7 @@ public class MainActivity extends Activity {
             "var ns=Array.from(f.querySelectorAll('button,[role=button],[data-icon]'));" +
             "function lb(n){return ((n.getAttribute('aria-label')||'')+' '+(n.getAttribute('title')||'')+' '+(n.innerText||'')).toLowerCase()}" +
             "var h=ns.find(function(n){return /voice message|record voice|microphone|mic|audio message/.test(lb(n))});" +
-            "if(!h){var i=f.querySelector('[data-icon*="ptt"],[data-icon*="mic"],[data-icon*="voice"]');if(i)h=i.closest('button,[role=button]')||i;}" +
+            "if(!h){var i=f.querySelector('[data-icon*=ptt],[data-icon*=mic],[data-icon*=voice]');if(i)h=i.closest('button,[role=button]')||i;}" +
             "if(!h)return false;h.click();return true;})()";
 
     private static final String JS_STOP_RECORD =
@@ -85,7 +85,7 @@ public class MainActivity extends Activity {
             "var ns=Array.from(f.querySelectorAll('button,[role=button],[data-icon]'));" +
             "function lb(n){return ((n.getAttribute('aria-label')||'')+' '+(n.getAttribute('title')||'')+' '+(n.innerText||'')).toLowerCase()}" +
             "var h=ns.find(function(n){return /stop recording|stop voice|finish recording|pause recording/.test(lb(n))});" +
-            "if(!h){var i=f.querySelector('[data-icon*="stop"],[data-icon*="pause"],[data-icon*="recording"]');if(i)h=i.closest('button,[role=button]')||i;}" +
+            "if(!h){var i=f.querySelector('[data-icon*=stop],[data-icon*=pause],[data-icon*=recording]');if(i)h=i.closest('button,[role=button]')||i;}" +
             "if(!h)return false;h.click();return true;})()";
 
     @Override protected void onCreate(Bundle state) {
@@ -167,6 +167,7 @@ public class MainActivity extends Activity {
 
     private void addRailButton(String symbol, String label, String description, Runnable action) {
         Button b = new Button(this);
+        b.setId(View.generateViewId());
         b.setAllCaps(false);
         b.setText(symbol + "\n" + label);
         b.setTextColor(0xFFF3F8F1);
@@ -260,6 +261,9 @@ public class MainActivity extends Activity {
         FrameLayout.LayoutParams wp = new FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT);
         wp.leftMargin = dp(116);
         root.addView(webView, 0, wp);
+        Button firstButton = (Button) sidebar.getChildAt(1);
+        webView.setNextFocusLeftId(firstButton.getId());
+        firstButton.requestFocus();
         for (int i = 0; i < sidebar.getChildCount(); i++) {
             View child = sidebar.getChildAt(i);
             if (child instanceof Button) child.setNextFocusRightId(webView.getId());
